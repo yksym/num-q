@@ -1,0 +1,71 @@
+name:                toy-machine
+version:             0.1.0.0
+github:              "githubuser/toy-machine"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2017 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on Github at <https://github.com/githubuser/toy-machine#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- brick
+- containers
+- linear
+- microlens
+- microlens-th
+- monad-coroutine
+- mtl
+- transformers
+- random
+- vty
+- word-wrap
+- lens
+- array
+
+library:
+  source-dirs: src
+
+executables:
+  toy-machine-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - toy-machine
+  bvm-exe:
+    main:                BVM.hs
+    source-dirs:         example
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - toy-machine
+
+tests:
+  toy-machine-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - toy-machine
+    - hspec
