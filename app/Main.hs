@@ -92,9 +92,9 @@ drawAA :: World -> Widget Name
 drawAA g = hLimit 40 $ vLimit 20 $ str $ g ^. aa
 
 drawGrid :: World -> Widget Name
-drawGrid g = withBorderStyle BS.ascii
-  $ B.border
-  $ vBox rows
+drawGrid g = -- withBorderStyle BS.ascii
+  -- $ B.border $
+  vBox rows
   where
     (w, h) = boardSize $ g ^. board
     rows         = [hBox $ cellsInRow r | r <- [0..(h-1)]]

@@ -47,8 +47,15 @@ movingObj key = NamedMachine ("movingObj@" ++ show key) $ \ev -> do
         E_Cmd_Die _ -> do
             return []
         E_Cmd_Dir _ d -> do
+            speed <- use pSpeed
             pDir .= d
+            pVel .= dir2vel speed d
             continueTo $ movingObj key
+        E_Cmd_Attack _ -> do
+            d <- use pDir
+            fpos <- use pPos
+            let v = dir2vel 1.0 d
+            [ E_Req_Add fire (" *", T_Attack) $ MovingObj (fpos + v) d 0.5 M_Slide v] |=> movingObj key
         _ -> throwError ev
 
 movingObjTicker :: ObjKey -> Object MovingObj
@@ -57,11 +64,9 @@ movingObjTicker key = NamedMachine ("movingObjTicker@" ++ show key) $ \ev -> do
     case ev of
         E_Cmd_Die _ -> do
             return []
-        E_Cmd_Tick _ b fkey -> do
+        E_Cmd_Tick _ b -> do
             fpos <- use pPos
-            absv <- use pVel
-            d <- use pDir
-            let v = dir2vel absv d
+            v <- use pVel
             case findObject key b of
                 Nothing -> return ()
                 Just pos -> do
@@ -70,7 +75,9 @@ movingObjTicker key = NamedMachine ("movingObjTicker@" ++ show key) $ \ev -> do
                     let pos' = floorV2 fpos'
                     when (pos /= pos') $ do
                         sendOr (E_Req_Move key pos pos') $ (movingObjTicker key) ^. machine
-                        pDir .= DIR_N -- ここ外すとsnake
+                        mmode <- use pMoveMode
+                        when (mmode == M_Step) $ pVel .= V2 0 0
+                        return ()
                     pPos .= fpos'
             continueTo $ movingObjTicker key
         _ -> throwError ev
@@ -90,36 +97,33 @@ initializer = NamedMachine "initializer" $ \ev -> case ev of
         aa .= printf additionMonsterAA (showN n) (showN m) " ?"
         aa' .= printf additionMonsterAA' (showN n) (showN m) (showN $ n + m)
 
-        let dummies = [k | k <- [1..20], abs (n + m - k) < 4]
-        (e:ts) <- liftIO $ take 20 <$> nub <$> randomRs (V2 1 1, boardMaxIdx) <$> newStdGen
+        let dummies = [k | k <- [1..20], abs (n + m - k) < 4, n + m /= k]
+        (e:ts) <- liftIO $ take 20 <$> nub <$> randomRs (V2 2 2, boardMaxIdx - V2 1 1) <$> newStdGen
         b  <- use board
         b' <- liftIO $ foldM trap1 b $ zip dummies ts
         board .= b'
-        --board . (ix (V2 1 1)) . (at wallKey) .= Just wall
-        --board . (ix (V2 2 2)) . (at wallKey) .= Just wall
 
-        [ E_Req_Add hero0 (" @", T_Hero) $ MovingObj (V2  0  0) DIR_N 0.3,
-          E_Req_Add enemy0 (showN $ n + m, T_Enemy) $ MovingObj (fromIntegralV2 e) DIR_N 0.3
+        [ E_Req_Add hero0 (" @", T_Hero) $ MovingObj (V2  1  1) DIR_D 0.3 M_Step (V2 0 0),
+          E_Req_Add enemy0 (showN $ n + m, T_Enemy) $ MovingObj (fromIntegralV2 e) DIR_D 0.3 M_Step (V2 0 0)
           ] |=> alphabetP'
             [ (isAnyObjAlphabet,  factory) -- ここから派生する全てのイベントをこいつがインターフェースとしてもつ必要がある
             , (has _E_Ext_Tick |.| has _E_Cmd_Tick, ticker)
             , (has _E_Req_Move |.| has _E_Cmd_Die, operator)
-            , (has _E_Ext_Key |.| has _E_Cmd_Dir, subscriber)
+            , (has _E_Ext_Key |.| has _E_Cmd_Dir |.| has _E_Cmd_Attack, subscriber)
             ]
     _ -> throwError ev
 
 factory :: System
 factory = NamedMachine "factory" $ \ev -> case ev of
     E_Req_Add key piece mo -> do
-        fkey <- use freshKey
-        fkey <= key !& ev
+        b <- use board
+        (has _Nothing $ findObject key b) !& ev
         let coord = floorV2 $ mo ^. pPos
         c <- use $ board . (ix coord)
         let c' = omInsert key piece c
         (keys, c'') <- updateCell c' ?& ev
         length keys == 0 !& ev
         board . (ix  coord) .= c''
-        freshKey .= succ key
         objKeys %= insert key
         continueTo $ (isAnyObjAlphabet, factory) <||> (isObjAlphabet key, movingObjInitializer key mo)
     _ -> continueTo factory
@@ -132,8 +136,7 @@ ticker = NamedMachine "ticker" $ \ev -> case ev of
             keys <- use objKeys
             forM_ keys $ \key -> do
                 b <- use $ board
-                fkey <- use freshKey
-                send $ E_Cmd_Tick key b fkey
+                send $ E_Cmd_Tick key b
         w <- get
         continueTo ticker
     _ -> throwError ev
@@ -149,7 +152,8 @@ operator = NamedMachine "operator" $ \ev -> case ev of
         let ct' = omInsert key piece ct
         (keys, ct'') <- updateCell ct' ?& ev
         forM_ keys $ \k -> do
-            when (ct' ^? (at k) . _Just . _2 == Just T_Hero) $ do
+            when ( (ct' ^? (at k) . _Just . _2 == Just T_Trap) ||
+                    (ct' ^? (at k) . _Just . _2 == Just T_Hero)) $ do
                 mode .= GameOver
                 tmp <- use aa'
                 aa .= tmp
@@ -170,6 +174,7 @@ subscriber = NamedMachine "subscriber" $ \ev -> case ev of
             "Down" -> send $ E_Cmd_Dir hero0 DIR_D
             "Right" -> send $ E_Cmd_Dir hero0 DIR_R
             "Left" -> send $ E_Cmd_Dir hero0 DIR_L
+            "Enter" -> send $ E_Cmd_Attack hero0
             "K" -> send $ E_Cmd_Dir enemy0 DIR_U
             "J" -> send $ E_Cmd_Dir enemy0 DIR_D
             "L" -> send $ E_Cmd_Dir enemy0 DIR_R
@@ -196,12 +201,27 @@ initGame = (initializer, initWorld)
 test :: IO ()
 test = do
     let g = initGame
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g E_Ext_Tick
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g E_Ext_Tick
+    putStrLn $ showBoard $ g ^. _2 . board
+    g <- perform g $ E_Ext_Key "Down"
+    putStrLn $ showBoard $ g ^. _2 . board
+    putStrLn $ showBoard $ g ^. _2 . board
+    g <- perform g $ E_Ext_Key "Enter"
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g $ E_Ext_Key "J"
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g $ E_Ext_Key "Left"
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g E_Ext_Tick
+    putStrLn $ showBoard $ g ^. _2 . board
     g <- perform g E_Ext_Tick
+    putStrLn $ showBoard $ g ^. _2 . board
+    g <- perform g E_Ext_Tick
+    putStrLn $ showBoard $ g ^. _2 . board
+
     return ()
 
 
