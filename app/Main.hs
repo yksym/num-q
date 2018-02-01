@@ -80,7 +80,7 @@ drawUI :: World -> [Widget Name]
 drawUI g = [ padLeft (Pad 5) $ padTop (Pad 5) $ (padRight (Pad 5) $ drawGrid g) <+> (drawAA g <=> (padTop (Pad 2) $ drawMsg g))]
 
 drawMsg :: World -> Widget Name
-drawMsg g = hLimit 40 $ vLimit 10 $ strWrapWith (defaultWrapSettings { preserveIndentation = True }) $ s
+drawMsg g = hLimit 40 $ vLimit 20 $ strWrapWith (defaultWrapSettings { preserveIndentation = True }) $ s
   where
     s = if
          | g ^. mode == GameOver -> "GAME OVER"

@@ -246,7 +246,7 @@ initWorld :: World
 initWorld = World
     { _board = initBoard
     , _mode = Running
-    , _msg  = ""
+    , _msg  = explanation
     , _aa   =  ""
     , _aa'  =  ""
     , _objKeys  = empty
@@ -325,3 +325,22 @@ additionMonsterAA' = "\
             \                                     \n\
             \  Addition Monster                   \n\
             \                                   "
+
+explanation :: String
+explanation = "\
+    \                                    \n\
+    \ Guess the answer, then shoot it!!  \n\
+    \                                    \n\
+    \ right arrow : Move                 \n\
+    \ left  arrow : Move                 \n\
+    \ up    arrow : Move                 \n\
+    \ down  arrow : Move                 \n\
+    \                                    \n\
+    \ Enter       : Attack               \n\
+    \                                    \n\
+    \ r           : Restart              \n\
+    \ q           : Quit                 \n\
+    \                                    \n\
+    \                                     "
+
+
