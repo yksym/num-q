@@ -11,4 +11,7 @@ test:
 example:
 	stack exec bvm-exe
 
-.PHONY: all run test example
+doc:
+	stack haddock
+
+.PHONY: all run test example doc

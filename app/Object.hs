@@ -83,8 +83,8 @@ movingObjTicker key = createMachine ("movingObjTicker@" ++ show key) $ \ev -> do
         _ -> throwError ev
 
 movingObjInitializer :: ObjKey -> MovingObj -> System
-movingObjInitializer key mo = liftNamedMachine $ unwrapST mo $
-    interfaceP (== E_Cmd_Die key) (movingObjTicker key) $ movingObj key
+movingObjInitializer key mo = liftMachine $ unwrapST mo $
+    interfaceP (== E_Cmd_Die key) [movingObjTicker key, movingObj key]
 
 
 initializer :: System
@@ -105,8 +105,8 @@ initializer = createMachine "initializer" $ \ev -> case ev of
 
         [ E_Req_Add hero0 (" @", T_Hero) $ MovingObj (V2  1  1) DIR_D 0.3 M_Step (V2 0 0),
           E_Req_Add enemy0 (showN $ n + m, T_Enemy) $ MovingObj (fromIntegralV2 e) DIR_D 0.3 M_Step (V2 0 0)
-          ] |=> alphabetP'
-            [ (isAnyObjAlphabet,  factory) -- ここから派生する全てのイベントをこいつがインターフェースとしてもつ必要がある
+          ] |=> alphabetP
+            [ (isAnyObjAlphabet,  factory)
             , (has _E_Ext_Tick |.| has _E_Cmd_Tick, ticker)
             , (has _E_Req_Move |.| has _E_Cmd_Die, operator)
             , (has _E_Ext_Key |.| has _E_Cmd_Dir |.| has _E_Cmd_Attack, subscriber)

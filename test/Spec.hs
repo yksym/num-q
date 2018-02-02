@@ -131,22 +131,22 @@ compSpec = describe "composition" $ do
     it ">>>-ok" $ isAccepted $ trans m $ scenario1 ++ scenario1 ++ scenario2
     it ">>>-ng" $ not $ isAccepted $ trans m $ scenario1 ++ scenario2 ++ scenario2 ++ scenario1
     it ">>>-ng" $ not $ isAccepted $ trans m [D 0]
-    let m = mAB |=| mBC
-    it "|=|-ok" $ isAccepted $ trans m $ [A 0, A 0, B 0]
-    it "|=|-ok" $ isAccepted $ trans m $ [B 0, A 0]
-    it "|=|-ok" $ isAccepted $ trans m $ [B 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [B 0, C 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [A 0, C 0]
-    it "|=|-ok" $ isAccepted $ trans m $ [C 0, C 0, B 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [C 0, A 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m [D 0]
-    let m = mA |=| mB |=| mC
-    it "|=|-ok" $ isAccepted $ trans m $ [A 0, A 0]
-    it "|=|-ok" $ isAccepted $ trans m $ [B 0, B 0]
-    it "|=|-ok" $ isAccepted $ trans m $ [C 0, C 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [A 0, B 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [B 0, C 0]
-    it "|=|-ng" $ not $ isAccepted $ trans m $ [C 0, A 0]
+    let m = mAB <> mBC
+    it "<>-ok" $ isAccepted $ trans m $ [A 0, A 0, B 0]
+    it "<>-ok" $ isAccepted $ trans m $ [B 0, A 0]
+    it "<>-ok" $ isAccepted $ trans m $ [B 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [B 0, C 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [A 0, C 0]
+    it "<>-ok" $ isAccepted $ trans m $ [C 0, C 0, B 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [C 0, A 0]
+    it "<>-ng" $ not $ isAccepted $ trans m [D 0]
+    let m = mA <> mB <> mC
+    it "<>-ok" $ isAccepted $ trans m $ [A 0, A 0]
+    it "<>-ok" $ isAccepted $ trans m $ [B 0, B 0]
+    it "<>-ok" $ isAccepted $ trans m $ [C 0, C 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [A 0, B 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [B 0, C 0]
+    it "<>-ng" $ not $ isAccepted $ trans m $ [C 0, A 0]
     let m = mAB \/ mBC
     it "\\/-ok" $ isAccepted $ trans m $ [A 0, A 0, B 0, C 0]
     it "\\/-ng" $ not $ isAccepted $ trans m $ [A 0, A 0, B 0, C 0, A 0]
@@ -161,12 +161,12 @@ compSpec = describe "composition" $ do
 
 parallelSpec :: Spec
 parallelSpec = describe "parallel" $ do
-    let m = interfaceP (has _B) mAB  mBC'
+    let m = interfaceP (has _B) [mAB,  mBC']
     it "interface-ok" $ isAccepted $ trans m [B 0, A 0] -- いつまでたっても mBC' 側は遷移出来ない
     it "interface-ok" $ isAccepted $ trans m [A 0]
     it "interface-ok" $ isAccepted $ trans m [C 0]
     it "interface-ng" $ not $ isAccepted $ trans m [B 0, B 0]
-    let m = interfaceP (has _B)  mAB  $ interfaceP (has _B |.| has _C) mBC mABC
+    let m = interfaceP (has _B)  [mAB, interfaceP (has _B |.| has _C) [mBC, mABC]]
     --runIO $ print $ run $ trans m [A 0]
     it "interface-ok" $ 1 == (length $ run $ trans m [A 0])
     it "interface-ok" $ 3 == (length $ run $ trans m [B 0])
@@ -189,7 +189,7 @@ parallelSpec = describe "parallel" $ do
     it "alphabet-ok" $ isAccepted $ trans m [B 0]
     it "alphabet-ok" $ isAccepted $ trans m [C 0]
     it "alphabet-ng" $ not $ isAccepted $ trans m [D 0]
-    let m = alphabetP' [(has _B, mAB),  (has _B |.| has _C, mBC')]
+    let m = alphabetP [(has _B, mAB),  (has _B |.| has _C, mBC')]
     it "alphabet-ok" $ not $ isAccepted $ trans m [A 0]
     it "alphabet-ok" $ isAccepted $ trans m [B 0]
     it "alphabet-ok" $ isAccepted $ trans m [C 0]
@@ -210,7 +210,7 @@ traceCheck = describe "composition" $ do
     let m = mABC >>> mA
     runIO $ print $ run $ trans m $ [C 0, D 1, A 0]
     
-    let m = mA |=| mB
+    let m = mA <> mB
     runIO $ print $ run $ trans m $ [A 0, A 0]
     runIO $ print $ run $ trans m $ [A 0, B 0]
     runIO $ print $ run $ trans m $ [B 0, A 0]
