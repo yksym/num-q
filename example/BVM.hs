@@ -16,14 +16,14 @@ makePrisms ''Ev
 
 
 trouble :: (MonadIO m, MonadError Ev m, MonadState Int m) => NamedMachine Ev m [Ev]
-trouble = NamedMachine "trouble" $ \ev -> case ev of
+trouble = createMachine "trouble" $ \ev -> case ev of
     Trouble -> do
         recv (^? _Repair)
         continueTo bvm
     _ -> throwError ev
 
 bvm :: (MonadIO m, MonadError Ev m, MonadState Int m) => NamedMachine Ev m [Ev]
-bvm = NamedMachine "bvm" $ \ev -> case ev of
+bvm = createMachine "bvm" $ \ev -> case ev of
     Coin -> do
         n <- get
         n > 0 !& ev

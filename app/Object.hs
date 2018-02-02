@@ -41,7 +41,7 @@ runSystem :: World -> StateT World M a -> IO (Either Event (a, World))
 runSystem w m = runExceptT $ runStateT m w
 
 movingObj :: ObjKey -> Object MovingObj
-movingObj key = NamedMachine ("movingObj@" ++ show key) $ \ev -> do
+movingObj key = createMachine ("movingObj@" ++ show key) $ \ev -> do
     isObjAlphabet key ev !& ev
     case ev of
         E_Cmd_Die _ -> do
@@ -59,7 +59,7 @@ movingObj key = NamedMachine ("movingObj@" ++ show key) $ \ev -> do
         _ -> throwError ev
 
 movingObjTicker :: ObjKey -> Object MovingObj
-movingObjTicker key = NamedMachine ("movingObjTicker@" ++ show key) $ \ev -> do
+movingObjTicker key = createMachine ("movingObjTicker@" ++ show key) $ \ev -> do
     isObjAlphabet key ev !& ev
     case ev of
         E_Cmd_Die _ -> do
@@ -74,7 +74,7 @@ movingObjTicker key = NamedMachine ("movingObjTicker@" ++ show key) $ \ev -> do
                     let fpos' = fpos + v
                     let pos' = floorV2 fpos'
                     when (pos /= pos') $ do
-                        sendOr (E_Req_Move key pos pos') $ (movingObjTicker key) ^. machine
+                        sendOr (E_Req_Move key pos pos') $ (movingObjTicker key) ^. rawMachine
                         mmode <- use pMoveMode
                         when (mmode == M_Step) $ pVel .= V2 0 0
                         return ()
@@ -88,7 +88,7 @@ movingObjInitializer key mo = liftNamedMachine $ unwrapST mo $
 
 
 initializer :: System
-initializer = NamedMachine "initializer" $ \ev -> case ev of
+initializer = createMachine "initializer" $ \ev -> case ev of
     E_Ext_Tick -> do
         --n <- liftIO $ randomRs (0,10) <$> newStdGen
         let n = 2
@@ -114,7 +114,7 @@ initializer = NamedMachine "initializer" $ \ev -> case ev of
     _ -> throwError ev
 
 factory :: System
-factory = NamedMachine "factory" $ \ev -> case ev of
+factory = createMachine "factory" $ \ev -> case ev of
     E_Req_Add key piece mo -> do
         b <- use board
         (has _Nothing $ findObject key b) !& ev
@@ -129,7 +129,7 @@ factory = NamedMachine "factory" $ \ev -> case ev of
     _ -> continueTo factory
 
 ticker :: System
-ticker = NamedMachine "ticker" $ \ev -> case ev of
+ticker = createMachine "ticker" $ \ev -> case ev of
     E_Ext_Tick -> do
         mode' <- use $ mode
         when (_Running `has` mode') $ do
@@ -143,7 +143,7 @@ ticker = NamedMachine "ticker" $ \ev -> case ev of
 
 
 operator :: System
-operator = NamedMachine "operator" $ \ev -> case ev of
+operator = createMachine "operator" $ \ev -> case ev of
     E_Req_Move key from to -> do
         b <- use $ board
         cf <- b ^? (ix from) ?& ev
@@ -167,7 +167,7 @@ operator = NamedMachine "operator" $ \ev -> case ev of
     _ ->  throwError ev
 
 subscriber :: System
-subscriber = NamedMachine "subscriber" $ \ev -> case ev of
+subscriber = createMachine "subscriber" $ \ev -> case ev of
     E_Ext_Key s -> do
         case s of
             "Up" -> send $ E_Cmd_Dir hero0 DIR_U

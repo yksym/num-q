@@ -24,8 +24,10 @@ run m = case runIdentity $ runExceptT $ runWriterT $ m of
     Left _ -> []
     Right (_, w) -> w
 
-bm1 :: (MonadError Ev m) => NamedMachine Ev m [Ev]
-bm1 = NamedMachine "bm1" $ \ev -> case ev of
+type MyMachine = NamedMachine
+
+bm1 :: (MonadError Ev m) => MyMachine Ev m [Ev]
+bm1 = createMachine "bm1" $ \ev -> case ev of
     A n -> do
         n' <- recv (^? _A)
         n == n' !& A n'
@@ -59,24 +61,24 @@ basicSpec = describe "basic" $ do
     it "|=>-ok" $ isAccepted $ trans m [C 3 ,C 2, C 6]
     it "|=>-ok" $ isAccepted $ batchTrans m [C 3 ,B 0]
 
-createMachine :: String -> Prism' Ev Int -> NamedMachine Ev M [Ev]
-createMachine s prism = NamedMachine s $ \ev -> if
+simpleMachine :: String -> Prism' Ev Int -> MyMachine Ev M [Ev]
+simpleMachine s prism = createMachine s $ \ev -> if
     | has prism ev -> do
         tell [ev]
-        continueTo $ createMachine s prism
+        continueTo $ simpleMachine s prism
     | otherwise -> throwError ev
 
-mA :: NamedMachine Ev M [Ev]
-mA = createMachine "mA" _A
+mA :: MyMachine Ev M [Ev]
+mA = simpleMachine "mA" _A
 
-mB :: NamedMachine Ev M [Ev]
-mB = createMachine "mB" _B
+mB :: MyMachine Ev M [Ev]
+mB = simpleMachine "mB" _B
 
-mC :: NamedMachine Ev M [Ev]
-mC = createMachine "mC" _C
+mC :: MyMachine Ev M [Ev]
+mC = simpleMachine "mC" _C
 
-mAB :: NamedMachine Ev M [Ev]
-mAB = NamedMachine "mAB" $ \ev -> case ev of
+mAB :: MyMachine Ev M [Ev]
+mAB = createMachine "mAB" $ \ev -> case ev of
     A _ -> do
         tell [ev]
         continueTo mAB
@@ -85,8 +87,8 @@ mAB = NamedMachine "mAB" $ \ev -> case ev of
         continueTo mAB
     _   -> throwError ev
 
-mBC :: NamedMachine Ev M [Ev]
-mBC = NamedMachine "mBC" $ \ev -> case ev of
+mBC :: MyMachine Ev M [Ev]
+mBC = createMachine "mBC" $ \ev -> case ev of
     B _ -> do
         tell [ev]
         continueTo mBC
@@ -95,8 +97,8 @@ mBC = NamedMachine "mBC" $ \ev -> case ev of
         continueTo mBC
     _ -> throwError ev
 
-mABC :: NamedMachine Ev M [Ev]
-mABC = NamedMachine "mABC" $ \ev -> case ev of
+mABC :: MyMachine Ev M [Ev]
+mABC = createMachine "mABC" $ \ev -> case ev of
     A _ -> do
         tell [ev]
         continueTo mABC
@@ -110,8 +112,8 @@ mABC = NamedMachine "mABC" $ \ev -> case ev of
         tell [ev]
         return []
 
-mBC' :: NamedMachine Ev M [Ev]
-mBC' = NamedMachine "mBC'" $ \ev -> case ev of
+mBC' :: MyMachine Ev M [Ev]
+mBC' = createMachine "mBC'" $ \ev -> case ev of
     B _ -> do
         tell [ev]
         args <- recv (^? _A)
@@ -194,8 +196,8 @@ parallelSpec = describe "parallel" $ do
     it "alphabet-ng" $ not $ isAccepted $ trans m [D 0]
 
 
-test :: Int -> NamedMachine Ev M [Ev]
-test n = NamedMachine ("test" ++ show n) $ \ev -> case ev of
+test :: Int -> MyMachine Ev M [Ev]
+test n = createMachine ("test" ++ show n) $ \ev -> case ev of
     A _ -> continueTo $ test $ n + 1
     B _ -> continueTo $ test $ n + 1
     C _ -> continueTo $ test $ n + 1
@@ -231,4 +233,3 @@ main = do
         compSpec
         parallelSpec
         traceCheck
-

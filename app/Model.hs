@@ -1,7 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, TemplateHaskell, FlexibleContexts, MultiWayIf #-}
 module Model
      ( module Model
-     -- , module Linear.V2
      ) where
 
 import Data.Array

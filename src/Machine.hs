@@ -1,14 +1,16 @@
-{-# LANGUAGE MultiParamTypeClasses, TemplateHaskell, RankNTypes, FlexibleContexts, FlexibleInstances, UndecidableInstances, MultiWayIf, CPP #-}
--- #define DEBUG
+{-# LANGUAGE MultiParamTypeClasses, TemplateHaskell, RankNTypes, FlexibleContexts, FlexibleInstances, UndecidableInstances, MultiWayIf, TypeFamilies #-}
 module Machine
   ( Machine
-  , MachineM
-  , NamedMachine(..)
-  , liftNamedMachine
-  , machine
+  , createNamedMachine
+  , createDebugMachine
+  , createMachine
   , machineName
+  , rawMachine
+  , traceEvent
+  , NamedMachine
+  , DebugMachine
+  , liftNamedMachine
   , unwrapST
-  , unwrapR
   , convM
   , trans1
   , trans
@@ -51,24 +53,7 @@ import Control.Monad.Except
 import Control.Monad.Trans.Class (lift)
 import Data.Either(fromLeft)
 import Control.Lens
-#ifdef DEBUG
 import Debug.Trace (traceM)
-#else
-traceM :: (Monad m) => String -> m ()
---traceM :: (MonadWriter [String] m) => String -> m ()
-traceM _ = return ()
-
-#endif
-
-type MachineM ev m  = Coroutine (Request (String, [ev]) ev) m -- Request out@(name, send) in
-type Machine ev m a = ev -> MachineM ev m a
-
-data NamedMachine ev m a = NamedMachine
-  { _machineName :: String
-    , _machine :: Machine ev m a
-  }
-
-makeLenses ''NamedMachine
 
 rename :: String -> Request (String, a) b c -> Request (String, a) b c
 rename s (Request (_, a) b) = Request (s, a) b
@@ -104,43 +89,85 @@ catchFirstError m h = Coroutine $ resume m `catchError` (\e -> resume $ h e)
 convM :: (Functor f, Functor m) => (forall b. m b -> m' b) -> Coroutine f m a -> Coroutine f m' a
 convM g (Coroutine m) = Coroutine $ g $ (fmap $ first $ fmap $ convM g) m
 
-liftNamedMachine :: (MonadTrans t, Monad m) => NamedMachine ev m a -> NamedMachine ev (t m) a
-liftNamedMachine nm = nm & machine %~ (convM lift .)
 
-unwrapST :: (Monad m') => s -> NamedMachine ev (StateT s m') a -> NamedMachine ev m' a
-unwrapST s nm = nm & machine %~ (go s . )
+type MachineM ev m  = Coroutine (Request (String, [ev]) ev) m -- Request out@(name, send) in
+type RawMachine ev m a = ev -> MachineM ev m a
+
+data NamedMachine ev m a = NamedMachine
+  { _nMachineName :: String
+  , _nMachine :: RawMachine ev m a
+  }
+
+makeLenses ''NamedMachine
+
+newtype DebugMachine ev m a = DebugMachine (NamedMachine ev m a)
+
+makeWrapped ''DebugMachine
+
+createNamedMachine = NamedMachine
+createDebugMachine x y = DebugMachine $ NamedMachine x y
+
+class Machine mc where
+    createMachine :: String -> RawMachine ev m a -> mc ev m a
+    machineName   :: Lens' (mc ev m a) String
+    rawMachine    :: Lens' (mc ev m a) (RawMachine ev m a)
+    traceEvent    :: (Monad m) => mc ev m a -> String -> m ()
+
+instance Machine NamedMachine where
+    createMachine  = createNamedMachine
+    machineName    = nMachineName
+    rawMachine     = nMachine
+    traceEvent _ _ = return ()
+
+instance Machine DebugMachine where
+    createMachine  = createDebugMachine
+    machineName    = _Wrapped . nMachineName
+    rawMachine     = _Wrapped . nMachine
+    traceEvent _ s = traceM s
+
+
+trans1 :: (Show ev, MonadError ev m, Machine mc) => mc ev m a -> ev -> m (Either ([ev], mc ev m a) a)
+trans1 mc ev = do
+        m `catchError` \x -> do
+            traceEvent mc $ "fail!! " <> show x <> " : ( " <> mn <> " )"
+            throwError x
+        where
+            mn = mc ^. machineName
+            ml = mc ^. rawMachine
+            m = do
+                traceEvent mc $ "test   " <> show ev <> " : ( " <> mn <> " )"
+                ret <- (fmap $ first unwrapRequest) $ resume $ ml ev
+                let news = either (\l -> " out: " <> (show $ fst l)) (const "") ret
+                traceEvent mc $ "trans! " <> show ev <> " : ( " <> mn <> " )" <> news
+                return ret
+            unwrapRequest (Request (mn', reqs) ml) = (reqs, createMachine (if null mn' then mn else mn') ml)
+
+
+liftNamedMachine :: (MonadTrans t, Monad m, Machine mc) => mc ev m a -> mc ev (t m) a
+liftNamedMachine nm = createMachine n m'
     where
-        go :: (Functor f, Monad m') => s -> Coroutine f (StateT s m') a -> Coroutine f m' a
+        m = nm ^. rawMachine
+        n = nm ^. machineName
+        m' = convM lift . m
+
+unwrapST :: (Monad m, Machine mc) => s -> mc ev (StateT s m) a -> mc ev m a
+unwrapST s nm = createMachine n m'
+    where
+        m  = nm ^. rawMachine
+        n  = nm ^. machineName
+        m' = go s . m
+        go :: (Functor f, Monad m) => s -> Coroutine f (StateT s m) a -> Coroutine f m a
         go s c@(Coroutine m) = Coroutine $ do
             (result, s') <- runStateT m s -- m (s, Either (f (Coroutine f m r)) r)
             let result' = (first $ fmap $ go s') $ result
             return result'
 
-unwrapR :: (Monad m') => r -> NamedMachine ev (ReaderT r m') a -> NamedMachine ev m' a
-unwrapR s nm = nm & machine %~ (convM (flip runReaderT s) .)
-
-
-trans1 :: (Show ev, MonadError ev m) => NamedMachine ev m a -> ev -> m (Either ([ev], NamedMachine ev m a) a)
-trans1 (NamedMachine mn ml) ev = do
-    m `catchError` \x -> do
-        traceM ("fail!! " <> show x <> " : ( " <> mn <> " )")
-        throwError x
-    where
-        m = do
-            traceM $ "test   " <> show ev <> " : ( " <> mn <> " )"
-            ret <- (fmap $ first unwrapRequest) $ resume $ ml ev
-            let news = either (\l -> " out: " <> (show $ fst l)) (const "") ret
-            traceM $ "trans! " <> show ev <> " : ( " <> mn <> " )" <> news
-            return ret
-        unwrapRequest (Request (mn', reqs) ml) = (reqs, NamedMachine (if null mn' then mn else mn') ml)
-
-
-trans :: (Show ev, MonadError ev m, Monad m) => NamedMachine ev m [ev] -> [ev] -> m (Maybe (NamedMachine ev m [ev]))
+trans :: (Show ev, MonadError ev m, Machine mc) => mc ev m [ev] -> [ev] -> m (Maybe (mc ev m [ev]))
 trans nm [] = return $ Just nm
 trans nm (ev:evs) = do
-    traceM ("\n** start ** " <> show ev <> " : remain ( " <> show evs <> " )")
+    traceEvent nm $ "\n** start ** " <> show ev <> " : remain ( " <> show evs <> " )"
     result <- trans1 nm ev
-    traceM ("** done **")
+    traceEvent nm $ "** done **"
     case result of
         Left (_, nm') -> trans nm' evs
         Right _ -> if null evs
@@ -148,44 +175,42 @@ trans nm (ev:evs) = do
             else throwError $ head evs
 
 
-batchTrans :: (Show ev, MonadError ev m, Monad m, Eq ev) => NamedMachine ev m [ev] -> [ev] -> m (Maybe (NamedMachine ev m [ev]))
+batchTrans :: (Show ev, Eq ev, MonadError ev m, Machine mc) => mc ev m [ev] -> [ev] -> m (Maybe (mc ev m [ev]))
 batchTrans nm [] = return $ Just nm
 batchTrans nm (ev:evs) = do
-    traceM ("\n** start ** " <> show ev <> " : remain ( " <> show evs <> " )")
+    traceEvent nm $ "\n** start ** " <> show ev <> " : remain ( " <> show evs <> " )"
     result <- trans1 nm ev
-    traceM ("** done **")
+    traceEvent nm $ "** done **"
     case result of
         Left (reqs, nm') -> batchTrans nm' $ nub $ reqs <> evs
         Right reqs -> if null $ nub $ reqs <> evs
             then return $ Nothing
             else throwError ev
 
-batchTransSkipError :: (Show ev, MonadError ev m, Monad m, Eq ev) => NamedMachine ev m [ev] -> [ev] -> m (Maybe (NamedMachine ev m [ev]))
+batchTransSkipError :: (Show ev, Eq ev, MonadError ev m, Machine mc) => mc ev m [ev] -> [ev] -> m (Maybe (mc ev m [ev]))
 batchTransSkipError nm [] = return $ Just nm
 batchTransSkipError nm (ev:evs) = do
-    traceM "\n** start ** "
-    traceM $ "proc  : " <> nm ^. machineName
-    traceM $ "event : " <> show ev <> " : remain ( " <> show evs <> " )"
+    traceEvent nm $ "\n** start ** "
+    traceEvent nm $ "proc  : " <> nm ^. machineName
+    traceEvent nm $ "event : " <> show ev <> " : remain ( " <> show evs <> " )"
     result <- (do
         result <- trans1 nm ev
-        traceM ("done")
+        traceEvent nm $ "done"
         return result
         ) `catchError` (\x -> do
-            traceM "skip"
+            traceEvent nm "skip"
             return $ Left ([], nm)
             )
     case result of
         Left (reqs, nm') -> do
-            traceM $ "result : " <> nm' ^. machineName
+            traceEvent nm $ "result : " <> nm' ^. machineName
             batchTransSkipError nm' $ nub $ reqs <> evs
         Right reqs -> if null $ nub $ reqs <> evs
             then return $ Nothing
             else throwError ev
 
-
-
-stop :: (MonadError ev m) => NamedMachine ev m a
-stop = NamedMachine "STOP" throwError
+stop :: (MonadError ev m, Machine mc) => mc ev m a
+stop = createMachine "STOP" throwError
 
 --------------------------
 -- prefix
@@ -198,7 +223,7 @@ recv p = do
         Just a -> return a
         Nothing -> throwError ev
 
-sendOr :: (Monad m, Eq ev) => ev -> Machine ev m [ev] -> MachineM ev m [ev]
+sendOr :: (Monad m, Eq ev) => ev -> RawMachine ev m [ev] -> MachineM ev m [ev]
 sendOr ev ml = do
     ev' <- request ("", [ev])
     if ev == ev'
@@ -211,8 +236,11 @@ send ev = do
     return ()
 
 
-(|=>) :: (Monad m) => [ev] -> NamedMachine ev m a -> MachineM ev m a
-req |=> (NamedMachine mn ml) = request (mn, req) >>= ml
+(|=>) :: (Monad m, Machine mc) => [ev] -> mc ev m a -> MachineM ev m a
+req |=> mc = request (mn, req) >>= ml
+    where
+        mn = mc ^. machineName
+        ml = mc ^. rawMachine
 infixr 0 |=>
 
 (!&) :: (MonadError ev m) => Bool -> ev -> MachineM ev m ()
@@ -226,48 +254,68 @@ m ?& ev = case m of
     Nothing -> throwError ev
 
 infixr 0 ?&
-continueTo :: (Monad m) => NamedMachine ev m a -> MachineM ev m a
-continueTo (NamedMachine mn ml) = request (mn, []) >>= ml
+continueTo :: (Monad m, Machine mc) => mc ev m a -> MachineM ev m a
+continueTo mc = request (mn, []) >>= ml
+    where
+        mn = mc ^. machineName
+        ml = mc ^. rawMachine
 
 --------------------------
 -- composition
 --------------------------
 
-(>>>) :: (Monad m) => NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev]
-(NamedMachine fn f) >>> nm = NamedMachine fn $ \ev -> do
+(>>>) :: (Monad m, Machine mc) => mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev]
+mc >>> nm = createMachine fn $ \ev -> do
         out <- f ev
         out |=> nm
+    where
+        fn = mc ^. machineName
+        f  = mc ^. rawMachine
 infixr 0 >>>
 
-(|=|) :: (MonadError ev m) => NamedMachine ev m a -> NamedMachine ev m a -> NamedMachine ev m a
-(NamedMachine fn f) |=| (NamedMachine gn g) = NamedMachine (fn <> " [] " <> gn) $ \x -> (mapFirstSuspension (rename fn) $ f x) `catchFirstError` (\_ -> mapFirstSuspension (rename gn) $ g x)
+(|=|) :: (MonadError ev m, Machine mc) => mc ev m a -> mc ev m a -> mc ev m a
+mcf  |=| mcg = createMachine (fn <> " [] " <> gn) $ \x -> (mapFirstSuspension (rename fn) $ f x) `catchFirstError` (\_ -> mapFirstSuspension (rename gn) $ g x)
+    where
+        fn = mcf ^. machineName
+        f  = mcf ^. rawMachine 
+        gn = mcg ^. machineName
+        g  = mcg ^. rawMachine 
 infixr 0 |=|
 
 
-(\/) :: (MonadError ev m) => NamedMachine ev m a -> NamedMachine ev m a -> NamedMachine ev m a
-(NamedMachine fn f) \/ (NamedMachine gn g) = NamedMachine (fn <> " \\/ " <> gn) $ \x -> Coroutine $ do
+(\/) :: (MonadError ev m, Machine mc) => mc ev m a -> mc ev m a -> mc ev m a
+mcf \/ mcg = createMachine (fn <> " \\/ " <> gn) $ \x -> Coroutine $ do
     resume (mapFirstSuspension (rename gn) $ g x) `catchError` (\_ -> do
         result <- resume $ f x
         case result of
-            Left (Request (fn', reqs) f') -> return $ Left $ Request (fn' <> " \\/ " <> gn, reqs) $ ((NamedMachine fn' f') \/ (NamedMachine gn g)) ^. machine
+            Left (Request (fn', reqs) f') -> return $ Left $ Request (fn' <> " \\/ " <> gn, reqs) $ ((createMachine fn' f') \/ mcg) ^. rawMachine
             Right reqs -> return $ Right reqs
         )
+    where
+        fn  = mcf ^. machineName
+        f   = mcf ^. rawMachine 
+        gn  = mcg ^. machineName
+        g   = mcg ^. rawMachine 
 
-interfaceP :: (Show ev, Eq ev, MonadError ev m) => (ev -> Bool) -> NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev]
-interfaceP p (NamedMachine fn f) (NamedMachine gn g) = NamedMachine (fn <> " [|I|] " <> gn) $ \x ->
+
+interfaceP :: (Show ev, Eq ev, MonadError ev m, Machine mc) => (ev -> Bool) -> mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev]
+interfaceP p mcf mcg = createMachine (fn <> " [|I|] " <> gn) $ \x ->
     if p x
-        then goBoth (interfaceP p) (NamedMachine fn f) (NamedMachine gn g) x
-        else goEither (interfaceP p) (NamedMachine fn f) (NamedMachine gn g) x
+        then goBoth (interfaceP p) mcf mcg x
+        else goEither (interfaceP p) mcf mcg x
+    where
+        fn  = mcf ^. machineName
+        gn  = mcg ^. machineName
 
-(|||) :: (Show ev, Eq ev, MonadError ev m) => NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev]
+(|||) :: (Show ev, Eq ev, MonadError ev m, Machine mc) => mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev]
 (|||) f g = interfaceP (const False) f g
 
 infixr 0 |||
 
 
 -- alphabet parallel
-(<||>) :: (Eq ev, Show ev, MonadError ev m) => ((ev -> Bool), NamedMachine ev m [ev]) -> ((ev -> Bool), NamedMachine ev m [ev]) -> NamedMachine ev m [ev]
-(pf, f) <||> (pg, g) = NamedMachine (f ^. machineName <> " [|A|] " <> g ^. machineName) $ \x -> if
+(<||>) :: (Eq ev, Show ev, MonadError ev m, Machine mc) => ((ev -> Bool), mc ev m [ev]) -> ((ev -> Bool), mc ev m [ev]) -> mc ev m [ev]
+(pf, f) <||> (pg, g) = createMachine (f ^. machineName <> " [|A|] " <> g ^. machineName) $ \x -> if
     | pf x && pg x -> goBoth  op f g x
     | pf x         -> goLeft  op f g x
     | pg x         -> goRight op f g x
@@ -278,59 +326,59 @@ infixr 0 |||
 (|.|) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
 f |.| g = \x -> f x || g x
 
-alphabetP' :: (Eq ev, Show ev, MonadError ev m) => [((ev -> Bool), NamedMachine ev m [ev])] -> NamedMachine ev m [ev]
+alphabetP' :: (Eq ev, Show ev, MonadError ev m, Machine mc) => [((ev -> Bool), mc ev m [ev])] -> mc ev m [ev]
 alphabetP' [] = stop -- any p [] == False
 alphabetP' ((p, m):[]) = error "not implimented" -- hide is needed
 alphabetP' (m1:m2:[]) = m1 <||> m2
-alphabetP' (m:ms) = m <||> (\ev -> any ($ ev) (ms ^.. traverse . _1), NamedMachine (concat $ intersperse " [|A|] " (ms ^.. traverse . _2 . machineName)) $ (alphabetP' ms) ^. machine)
+alphabetP' (m:ms) = m <||> (\ev -> any ($ ev) (ms ^.. traverse . _1), createMachine (concat $ intersperse " [|A|] " (ms ^.. traverse . _2 . machineName)) $ (alphabetP' ms) ^. rawMachine)
 
-goBoth :: (Eq ev, Show ev, MonadError ev m)
-    => (NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev])
-    -> NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> Machine ev m [ev]
-goBoth op (NamedMachine fn f) (NamedMachine gn g) x = Coroutine $ do
-    --when (not $ null fn) $ traceM $ "inBL: " <> show x <> "@" <> fn
-    result <- trans1 (NamedMachine fn f) x
+goBoth :: (Eq ev, Show ev, MonadError ev m, Machine mc)
+    => (mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev])
+    -> mc ev m [ev] -> mc ev m [ev] -> RawMachine ev m [ev]
+goBoth op mcf mcg x = Coroutine $ do
+    result <- trans1 mcf x
     case result of
-        Left (reqs, (NamedMachine fn' f')) -> do
-            --when (not $ null gn) $ traceM $ "inBR: " <> show x <> "@" <> gn
-            result <- trans1 (NamedMachine gn g) x
+        Left (reqs, mcf') -> do
+            result <- trans1 mcg x
             case result of
-                Left (reqs', (NamedMachine gn' g')) -> do
-                    let (NamedMachine mn ml) = (NamedMachine fn' f') `op` (NamedMachine gn' g')
-                    return $ Left $ Request (mn, nub $ reqs <> reqs') $ ml
-                Right reqs' -> return $ Left $ Request (fn', nub $ reqs <> reqs') f'
+                Left (reqs', mcg') -> do
+                    let mc = mcf' `op` mcg'
+                    return $ Left $ Request (mc ^. machineName, nub $ reqs <> reqs') $ mc ^. rawMachine
+                Right reqs' -> return $ Left $ Request (mcf' ^. machineName, nub $ reqs <> reqs') $ mcf' ^. rawMachine
         Right reqs -> do
-            result <- trans1 (NamedMachine gn g) x
+            result <- trans1 mcg x
             case result of
-                Left (reqs', (NamedMachine gn' g')) -> return $ Left $ Request (gn', nub $ reqs <> reqs') $ g'
+                Left (reqs', mcg') -> return $ Left $ Request (mcg' ^. machineName, nub $ reqs <> reqs') $ mcg' ^. rawMachine
                 Right reqs' -> return $ Right $ nub $ reqs <> reqs'
 
-goLeft :: (Eq ev, Show ev, MonadError ev m)
-    => (NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev])
-    -> NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> Machine ev m [ev]
-goLeft op (NamedMachine fn f) (NamedMachine gn g) = \x -> Coroutine $ do
-    --when (not $ null fn) $ traceM $ "inL: " <> show x <> "@" <> fn
-    result <- trans1 (NamedMachine fn f) x
-    case result of
-        Left (reqs, (NamedMachine fn' f')) -> do
-            let (NamedMachine mn ml) = (NamedMachine fn' f') `op` (NamedMachine gn g)
-            return $ Left $ Request (mn, reqs) $ ml
-        Right reqs -> return $ Left $ Request (gn, reqs) g
 
-goRight :: (Eq ev, Show ev, MonadError ev m)
-    => (NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev])
-    -> NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> Machine ev m [ev]
-goRight op (NamedMachine fn f) (NamedMachine gn g) = \x -> Coroutine $ do
-    --when (not $ null gn) $ traceM $ "inR: " <> show x <> "@" <> gn
-    result <- trans1 (NamedMachine gn g) x
+goLeft :: (Eq ev, Show ev, MonadError ev m, Machine mc)
+    => (mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev])
+    -> mc ev m [ev] -> mc ev m [ev] -> RawMachine ev m [ev]
+goLeft op mcf mcg = \x -> Coroutine $ do
+    result <- trans1 mcf x
     case result of
-        Left (reqs, (NamedMachine gn' g')) -> do
-            let (NamedMachine mn ml) = (NamedMachine fn f) `op` (NamedMachine gn' g')
-            return $ Left $ Request (mn, reqs) $ ml
-        Right reqs -> return $ Left $ Request (fn, reqs) f
+        Left (reqs, mcf') -> do
+            let mc = mcf' `op` mcg
+            return $ Left $ Request (mc ^. machineName, reqs) $ mc ^. rawMachine
+        Right reqs -> return $ Left $ Request (mcg ^. machineName, reqs) $ mcg ^. rawMachine
 
-goEither :: (Eq ev, Show ev, MonadError ev m)
-    => (NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> NamedMachine ev m [ev])
-    -> NamedMachine ev m [ev] -> NamedMachine ev m [ev] -> Machine ev m [ev]
-goEither op f g =  ((NamedMachine "" $ goLeft op f g) |=| (NamedMachine "" $ goRight op f g)) ^. machine
+goRight :: (Eq ev, Show ev, MonadError ev m, Machine mc)
+    => (mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev])
+    -> mc ev m [ev] -> mc ev m [ev] -> RawMachine ev m [ev]
+goRight op mcf mcg = \x -> Coroutine $ do
+    result <- trans1 mcg x
+    case result of
+        Left (reqs, mcg') -> do
+            let mc = mcf `op` mcg'
+            return $ Left $ Request (mc ^. machineName, reqs) $ mc ^. rawMachine
+        Right reqs -> return $ Left $ Request (mcf ^. machineName, reqs) $ mcf ^. rawMachine
+
+goEither :: (Eq ev, Show ev, MonadError ev m, Machine mc)
+    => (mc ev m [ev] -> mc ev m [ev] -> mc ev m [ev])
+    -> mc ev m [ev] -> mc ev m [ev] -> RawMachine ev m [ev]
+goEither op f g =  (ml |=| mr) ^. rawMachine
+    where
+        ml = (createMachine "" $ goLeft  op f g) `asTypeOf` g
+        mr = (createMachine "" $ goRight op f g) `asTypeOf` g
 
