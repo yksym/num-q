@@ -133,6 +133,9 @@ ticker = createMachine "ticker" $ \ev -> case ev of
     E_Ext_Tick -> do
         mode' <- use $ mode
         when (_Running `has` mode') $ do
+            c <- use cnt
+            when (c == 0) $ mode .= GameOver
+            cnt %= pred
             keys <- use objKeys
             forM_ keys $ \key -> do
                 b <- use $ board

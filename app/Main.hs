@@ -35,6 +35,7 @@ import qualified Data.Sequence as S
 import Linear.V2 (V2(..))
 import Lens.Micro ((^.))
 import Data.Array
+import Text.Printf
 import Object -- Machine
 import Model
 
@@ -77,19 +78,22 @@ handleEvent g _                                     = continue g
 data Name = VP deriving (Ord, Show, Eq)
 
 drawUI :: World -> [Widget Name]
-drawUI g = [ padLeft (Pad 5) $ padTop (Pad 5) $ (padRight (Pad 5) $ drawGrid g) <+> (drawAA g <=> (padTop (Pad 2) $ drawMsg g))]
+drawUI g = [ padLeft (Pad 5) $ padTop (Pad 5) $ (padRight (Pad 5) $ drawSystem g <=> (padTop (Pad 2) $ drawGrid g) ) <+> (drawAA g <=> (padTop (Pad 2) $ drawMsg g))]
 
 drawMsg :: World -> Widget Name
 drawMsg g = hLimit 40 $ vLimit 20 $ strWrapWith (defaultWrapSettings { preserveIndentation = True }) $ s
   where
     s = if
          | g ^. mode == GameOver -> "GAME OVER"
-         | g ^. mode == GameClear -> "GAME CLEAR"
+         | g ^. mode == GameClear -> "GAME CLEAR!! type 'q' or 'r'"
          | otherwise -> g ^. msg
 
 
 drawAA :: World -> Widget Name
 drawAA g = hLimit 40 $ vLimit 20 $ str $ g ^. aa
+
+drawSystem :: World -> Widget Name
+drawSystem g = hLimit 40 $ vLimit 20 $ str $ printf "%2d sec left.." $ (g ^. cnt) `div` 30
 
 drawGrid :: World -> Widget Name
 drawGrid g = -- withBorderStyle BS.ascii

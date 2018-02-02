@@ -105,6 +105,7 @@ data World = World
   { _board  :: Board
   , _mode   :: GameMode
   , _msg    :: String
+  , _cnt    :: Int
   , _aa     :: String
   , _aa'    :: String
   , _objKeys  :: Set ObjKey
@@ -246,6 +247,7 @@ initWorld = World
     { _board = initBoard
     , _mode = Running
     , _msg  = explanation
+    , _cnt  =  30 * 30 -- 30 sec @ 30 fps
     , _aa   =  ""
     , _aa'  =  ""
     , _objKeys  = empty
